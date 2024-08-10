@@ -56,10 +56,10 @@ udevlib = { package = "udev", version = "^0.8.0", optional = true }
 
 [features]
 libusb = ["dep:rusb"]
-udev = ["nusb", "dep:udevrs"]
-udev_hwdb = ["nusb", "udevlib?/hwdb"]
+udev = ["dep:udevrs"]
+udev_hwdb = ["udevlib?/hwdb"]
 # libudev C binding
-udevlib = ["nusb", "dep:udevlib"]
+udevlib = ["dep:udevlib"]
 usb_test = []
 regex_icon = ["dep:regex"]
 cli_generate = ["dep:clap_complete", "dep:clap_mangen"] # for generating man and completions

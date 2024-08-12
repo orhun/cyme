@@ -23,11 +23,6 @@ use crate::usb;
 
 const REQUEST_GET_DESCRIPTOR: u8 = 0x06;
 const REQUEST_GET_STATUS: u8 = 0x00;
-const DT_DEBUG: u8 = 0x0a;
-const DT_REPORT: u8 = 0x22;
-const DT_HUB: u8 = 0x29;
-const DT_SUPERSPEED_HUB: u8 = 0x2A;
-const DT_BOS: u8 = 0x0F;
 
 /// Transfer direction
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -90,7 +85,7 @@ where
             control_type: ControlType::Standard,
             recipient: Recipient::Interface,
             request: REQUEST_GET_DESCRIPTOR,
-            value: (DT_REPORT as u16) << 8,
+            value: (u8::from(usb::DescriptorType::Report) as u16) << 8,
             index,
             length: length as usize,
         };
@@ -105,9 +100,9 @@ where
     ) -> Result<usb::HubDescriptor> {
         let is_ext_status = protocol == 3 && bcd >= 0x0310 && has_ssp;
         let value = if bcd >= 0x0300 {
-            (DT_SUPERSPEED_HUB as u16) << 8
+            (u8::from(usb::DescriptorType::SuperSpeedHub) as u16) << 8
         } else {
-            (DT_HUB as u16) << 8
+            (u8::from(usb::DescriptorType::Hub) as u16) << 8
         };
         let control = ControlRequest {
             control_type: ControlType::Class,
@@ -168,7 +163,7 @@ where
         let control = ControlRequest {
             control_type: ControlType::Standard,
             request: REQUEST_GET_DESCRIPTOR,
-            value: (DT_DEBUG as u16) << 8,
+            value: (u8::from(usb::DescriptorType::Debug) as u16) << 8,
             index: 0,
             recipient: Recipient::Device,
             length: 2,
@@ -183,7 +178,7 @@ where
         let mut control = ControlRequest {
             control_type: ControlType::Standard,
             request: REQUEST_GET_DESCRIPTOR,
-            value: (DT_BOS as u16) << 8,
+            value: (u8::from(usb::DescriptorType::Bos) as u16) << 8,
             index: 0,
             recipient: Recipient::Device,
             length: 5,
@@ -467,6 +462,106 @@ where
         Ok(dt)
     }
 
+    fn build_config_descriptor_extra(
+        &self,
+        device: &T,
+        mut raw: Vec<u8>,
+    ) -> Result<Vec<usb::Descriptor>> {
+        let extra_len = raw.len();
+        let mut taken = 0;
+        let mut ret = Vec::new();
+
+        // Iterate on chunks of the header length
+        while taken < extra_len && extra_len >= 2 {
+            let dt_len = raw[0] as usize;
+            let dt = self.build_descriptor_extra::<u8>(
+                device,
+                None,
+                None,
+                &raw.drain(..dt_len).collect::<Vec<u8>>(),
+            )?;
+            log::trace!("Config descriptor extra: {:?}", dt);
+            ret.push(dt);
+            taken += dt_len;
+        }
+
+        Ok(ret)
+    }
+
+    fn build_interface_descriptor_extra<C: Into<usb::ClassCode> + Copy>(
+        &self,
+        device: &T,
+        class_code: usb::ClassCodeTriplet<C>,
+        interface_number: u8,
+        mut raw: Vec<u8>,
+    ) -> Result<Vec<usb::Descriptor>> {
+        let extra_len = raw.len();
+        let mut taken = 0;
+        let mut ret = Vec::new();
+
+        // Iterate on chunks of the header length
+        while taken < extra_len && extra_len >= 2 {
+            let dt_len = raw[0] as usize;
+            if let Some(b) = raw.get_mut(1) {
+                // Mask request type LIBUSB_REQUEST_TYPE_CLASS
+                *b &= !(0x01 << 5);
+                // if not Device or Interface, force it to Interface
+                if *b != 0x01 || *b != 0x04 {
+                    *b = 0x04;
+                }
+            }
+
+            let dt = self.build_descriptor_extra(
+                device,
+                Some(class_code),
+                Some(interface_number),
+                &raw.drain(..dt_len).collect::<Vec<u8>>(),
+            )?;
+
+            log::trace!("Interface descriptor extra: {:?}", dt);
+            ret.push(dt);
+            taken += dt_len;
+        }
+
+        Ok(ret)
+    }
+
+    fn build_endpoint_descriptor_extra<C: Into<usb::ClassCode> + Copy>(
+        &self,
+        device: &T,
+        class_code: usb::ClassCodeTriplet<C>,
+        interface_number: u8,
+        mut raw: Vec<u8>,
+    ) -> Result<Option<Vec<usb::Descriptor>>> {
+        let extra_len = raw.len();
+        let mut taken = 0;
+        let mut ret = Vec::new();
+
+        // Iterate on chunks of the header length
+        while taken < extra_len && extra_len >= 2 {
+            let dt_len = raw[0] as usize;
+            if let Some(b) = raw.get_mut(1) {
+                // Mask request type LIBUSB_REQUEST_TYPE_CLASS for Endpoint: 0x25
+                if *b == 0x25 {
+                    *b &= !(0x01 << 5);
+                }
+            };
+
+            let dt = self.build_descriptor_extra(
+                device,
+                Some(class_code),
+                Some(interface_number),
+                &raw.drain(..dt_len).collect::<Vec<u8>>(),
+            )?;
+
+            log::trace!("Endpoint descriptor extra: {:?}", dt);
+            ret.push(dt);
+            taken += dt_len;
+        }
+
+        Ok(Some(ret))
+    }
+
     fn profile_devices(
         &self,
         devices: &mut Vec<system_profiler::USBDevice>,
@@ -744,119 +839,6 @@ pub mod libusb {
     }
 
     impl LibUsbProfiler {
-        fn build_endpoint_descriptor_extra<T: libusb::UsbContext>(
-            &self,
-            handle: &UsbDevice<T>,
-            interface_desc: &libusb::InterfaceDescriptor,
-            endpoint_desc: &libusb::EndpointDescriptor,
-        ) -> Result<Option<Vec<usb::Descriptor>>> {
-            match endpoint_desc.extra() {
-                Some(extra_bytes) => {
-                    let mut extra_bytes = extra_bytes.to_owned();
-                    let extra_len = extra_bytes.len();
-                    let mut taken = 0;
-                    let mut ret = Vec::new();
-
-                    // Iterate on chunks of the header length
-                    while taken < extra_len && extra_len >= 2 {
-                        let dt_len = extra_bytes[0] as usize;
-                        if let Some(b) = extra_bytes.get_mut(1) {
-                            // Mask request type LIBUSB_REQUEST_TYPE_CLASS for Endpoint: 0x25
-                            if *b == 0x25 {
-                                *b &= !(0x01 << 5);
-                            }
-                        };
-
-                        let dt = self.build_descriptor_extra(
-                            handle,
-                            Some((
-                                interface_desc.class_code(),
-                                interface_desc.sub_class_code(),
-                                interface_desc.protocol_code(),
-                            )),
-                            Some(interface_desc.interface_number()),
-                            &extra_bytes.drain(..dt_len).collect::<Vec<u8>>(),
-                        )?;
-
-                        log::trace!("Endpoint descriptor extra: {:?}", dt);
-                        ret.push(dt);
-                        taken += dt_len;
-                    }
-
-                    Ok(Some(ret))
-                }
-                None => Ok(None),
-            }
-        }
-
-        fn build_interface_descriptor_extra<T: libusb::UsbContext>(
-            &self,
-            handle: &UsbDevice<T>,
-            interface_desc: &libusb::InterfaceDescriptor,
-        ) -> Result<Vec<usb::Descriptor>> {
-            let mut extra_bytes = interface_desc.extra().to_owned();
-            let extra_len = extra_bytes.len();
-            let mut taken = 0;
-            let mut ret = Vec::new();
-
-            // Iterate on chunks of the header length
-            while taken < extra_len && extra_len >= 2 {
-                let dt_len = extra_bytes[0] as usize;
-                if let Some(b) = extra_bytes.get_mut(1) {
-                    // Mask request type LIBUSB_REQUEST_TYPE_CLASS
-                    *b &= !(0x01 << 5);
-                    // if not Device or Interface, force it to Interface
-                    if *b != 0x01 || *b != 0x04 {
-                        *b = 0x04;
-                    }
-                }
-
-                let dt = self.build_descriptor_extra(
-                    handle,
-                    Some((
-                        interface_desc.class_code(),
-                        interface_desc.sub_class_code(),
-                        interface_desc.protocol_code(),
-                    )),
-                    Some(interface_desc.interface_number()),
-                    &extra_bytes.drain(..dt_len).collect::<Vec<u8>>(),
-                )?;
-
-                log::trace!("Interface descriptor extra: {:?}", dt);
-                ret.push(dt);
-                taken += dt_len;
-            }
-
-            Ok(ret)
-        }
-
-        fn build_config_descriptor_extra<T: libusb::UsbContext>(
-            &self,
-            handle: &UsbDevice<T>,
-            config_desc: &libusb::ConfigDescriptor,
-        ) -> Result<Vec<usb::Descriptor>> {
-            let mut extra_bytes = config_desc.extra().to_owned();
-            let extra_len = extra_bytes.len();
-            let mut taken = 0;
-            let mut ret = Vec::new();
-
-            // Iterate on chunks of the header length
-            while taken < extra_len && extra_len >= 2 {
-                let dt_len = extra_bytes[0] as usize;
-                let dt = self.build_descriptor_extra::<u8>(
-                    handle,
-                    None,
-                    None,
-                    &extra_bytes.drain(..dt_len).collect::<Vec<u8>>(),
-                )?;
-                log::trace!("Config descriptor extra: {:?}", dt);
-                ret.push(dt);
-                taken += dt_len;
-            }
-
-            Ok(ret)
-        }
-
         fn build_endpoints<T: libusb::UsbContext>(
             &self,
             handle: &UsbDevice<T>,
@@ -865,6 +847,17 @@ pub mod libusb {
             let mut ret: Vec<usb::USBEndpoint> = Vec::new();
 
             for endpoint_desc in interface_desc.endpoint_descriptors() {
+                let extra_desc = if let Some(extra) = endpoint_desc.extra() {
+                    self.build_endpoint_descriptor_extra(
+                        handle,
+                        (interface_desc.class_code(), interface_desc.sub_class_code(), interface_desc.protocol_code()),
+                        interface_desc.interface_number(),
+                        extra.to_vec(),
+                    ).ok().flatten()
+                } else {
+                    None
+                };
+
                 ret.push(usb::USBEndpoint {
                     address: usb::EndpointAddress {
                         address: endpoint_desc.address(),
@@ -877,10 +870,7 @@ pub mod libusb {
                     max_packet_size: endpoint_desc.max_packet_size(),
                     interval: endpoint_desc.interval(),
                     length: endpoint_desc.length(),
-                    extra: self
-                        .build_endpoint_descriptor_extra(handle, interface_desc, &endpoint_desc)
-                        .ok()
-                        .flatten(),
+                    extra: extra_desc,
                 });
             }
 
@@ -922,7 +912,7 @@ pub mod libusb {
                         length: interface_desc.length(),
                         endpoints: self.build_endpoints(handle, &interface_desc),
                         extra: self
-                            .build_interface_descriptor_extra(handle, &interface_desc)
+                            .build_interface_descriptor_extra(handle, (interface_desc.class_code(), interface_desc.sub_class_code(), interface_desc.protocol_code()), interface_desc.interface_number(), interface_desc.extra().to_vec())
                             .ok(),
                     };
 
@@ -996,7 +986,7 @@ pub mod libusb {
                     total_length: config_desc.total_length(),
                     interfaces: self.build_interfaces(device, handle, &config_desc, with_udev)?,
                     extra: self
-                        .build_config_descriptor_extra(handle, &config_desc)
+                        .build_config_descriptor_extra(handle, config_desc.extra().to_vec())
                         .ok(),
                 });
             }
@@ -1380,6 +1370,8 @@ pub mod nusb {
     pub(crate) struct UsbDevice {
         handle: nusb::Device,
         language: u16,
+        vidpid: (u16, u16),
+        location: system_profiler::DeviceLocation,
         timeout: std::time::Duration,
     }
 
@@ -1504,112 +1496,6 @@ pub mod nusb {
     }
 
     impl NusbProfiler {
-        fn build_config_descriptor_extra(
-            &self,
-            device: &UsbDevice,
-            mut raw: Vec<u8>,
-        ) -> Result<Vec<usb::Descriptor>> {
-            let extra_len = raw.len();
-            let mut taken = 0;
-            let mut ret = Vec::new();
-
-            // Iterate on chunks of the header length
-            while taken < extra_len && extra_len >= 2 {
-                let dt_len = raw[0] as usize;
-                let dt = self.build_descriptor_extra::<u8>(
-                    device,
-                    None,
-                    None,
-                    &raw.drain(..dt_len).collect::<Vec<u8>>(),
-                )?;
-                log::trace!("Config descriptor extra: {:?}", dt);
-                ret.push(dt);
-                taken += dt_len;
-            }
-
-            Ok(ret)
-        }
-
-        fn build_interface_descriptor_extra(
-            &self,
-            device: &UsbDevice,
-            interface_desc: &nusb::descriptors::InterfaceAltSetting,
-            mut raw: Vec<u8>,
-        ) -> Result<Vec<usb::Descriptor>> {
-            let extra_len = raw.len();
-            let mut taken = 0;
-            let mut ret = Vec::new();
-
-            // Iterate on chunks of the header length
-            while taken < extra_len && extra_len >= 2 {
-                let dt_len = raw[0] as usize;
-                if let Some(b) = raw.get_mut(1) {
-                    // Mask request type LIBUSB_REQUEST_TYPE_CLASS
-                    *b &= !(0x01 << 5);
-                    // if not Device or Interface, force it to Interface
-                    if *b != 0x01 || *b != 0x04 {
-                        *b = 0x04;
-                    }
-                }
-
-                let dt = self.build_descriptor_extra(
-                    device,
-                    Some((
-                        interface_desc.class(),
-                        interface_desc.subclass(),
-                        interface_desc.protocol(),
-                    )),
-                    Some(interface_desc.interface_number()),
-                    &raw.drain(..dt_len).collect::<Vec<u8>>(),
-                )?;
-
-                log::trace!("Interface descriptor extra: {:?}", dt);
-                ret.push(dt);
-                taken += dt_len;
-            }
-
-            Ok(ret)
-        }
-
-        fn build_endpoint_descriptor_extra(
-            &self,
-            device: &UsbDevice,
-            interface_desc: &nusb::descriptors::InterfaceAltSetting,
-            mut raw: Vec<u8>,
-        ) -> Result<Option<Vec<usb::Descriptor>>> {
-            let extra_len = raw.len();
-            let mut taken = 0;
-            let mut ret = Vec::new();
-
-            // Iterate on chunks of the header length
-            while taken < extra_len && extra_len >= 2 {
-                let dt_len = raw[0] as usize;
-                if let Some(b) = raw.get_mut(1) {
-                    // Mask request type LIBUSB_REQUEST_TYPE_CLASS for Endpoint: 0x25
-                    if *b == 0x25 {
-                        *b &= !(0x01 << 5);
-                    }
-                };
-
-                let dt = self.build_descriptor_extra(
-                    device,
-                    Some((
-                        interface_desc.class(),
-                        interface_desc.subclass(),
-                        interface_desc.protocol(),
-                    )),
-                    Some(interface_desc.interface_number()),
-                    &raw.drain(..dt_len).collect::<Vec<u8>>(),
-                )?;
-
-                log::trace!("Endpoint descriptor extra: {:?}", dt);
-                ret.push(dt);
-                taken += dt_len;
-            }
-
-            Ok(Some(ret))
-        }
-
         fn build_endpoints(
             &self,
             device: &UsbDevice,
@@ -1635,7 +1521,7 @@ pub mod nusb {
                     interval: endpoint.interval(),
                     length: endpoint_desc[0],
                     extra: self
-                        .build_endpoint_descriptor_extra(device, interface_desc, endpoint_extra)
+                        .build_endpoint_descriptor_extra(device, (interface_desc.class(), interface_desc.subclass(), interface_desc.protocol()), interface_desc.interface_number(), endpoint_extra)
                         .ok()
                         .flatten(),
                 });
@@ -1647,7 +1533,6 @@ pub mod nusb {
         fn build_interfaces(
             &self,
             device: &UsbDevice,
-            sp_device: &system_profiler::USBDevice,
             config: &nusb::descriptors::Configuration,
             with_udev: bool,
         ) -> Result<Vec<usb::USBInterface>> {
@@ -1656,8 +1541,8 @@ pub mod nusb {
             for interface in config.interfaces() {
                 for interface_alt in interface.alt_settings() {
                     let path = usb::get_interface_path(
-                        sp_device.location_id.bus,
-                        &sp_device.location_id.tree_positions,
+                        device.location.bus,
+                        &device.location.tree_positions,
                         config.configuration_value(),
                         interface_alt.interface_number(),
                     );
@@ -1693,7 +1578,8 @@ pub mod nusb {
                         extra: self
                             .build_interface_descriptor_extra(
                                 device,
-                                &interface_alt,
+                                (interface_alt.class(), interface_alt.subclass(), interface_alt.protocol()),
+                                interface_alt.interface_number(),
                                 interface_extra,
                             )
                             .ok(),
@@ -1716,7 +1602,6 @@ pub mod nusb {
         fn build_configurations(
             &self,
             device: &UsbDevice,
-            sp_device: &system_profiler::USBDevice,
             with_udev: bool,
         ) -> Result<Vec<usb::USBConfiguration>> {
             let mut ret: Vec<usb::USBConfiguration> = Vec::new();
@@ -1757,7 +1642,7 @@ pub mod nusb {
                     },
                     length: config_desc.len() as u8,
                     total_length,
-                    interfaces: self.build_interfaces(device, sp_device, &c, with_udev)?,
+                    interfaces: self.build_interfaces(device, &c, with_udev)?,
                     extra: self
                         .build_config_descriptor_extra(device, config_extra)
                         .ok(),
@@ -1773,15 +1658,41 @@ pub mod nusb {
             sp_device: &mut system_profiler::USBDevice,
             with_udev: bool,
         ) -> Result<usb::USBDeviceExtra> {
+            // get the Device Descriptor since not all data is cached
             let device_desc_raw = device.handle.get_descriptor(
                 0x01,
                 0x00,
                 0x00,
-                std::time::Duration::from_secs(1),
+                device.timeout,
             )?;
             let device_desc: usb::DeviceDescriptor =
                 usb::DeviceDescriptor::try_from(device_desc_raw.as_slice())?;
             sp_device.bcd_usb = Some(device_desc.usb_version);
+
+            // try to get strings from device descriptors
+            if let Ok(name) = device
+                .handle
+                .get_string_descriptor(device_desc.product_string_index, 0, device.timeout)
+                .map(|s| s.to_string())
+            {
+                sp_device.name = name;
+            }
+
+            if let Ok(manufacturer) = device
+                .handle
+                .get_string_descriptor(device_desc.manufacturer_string_index, 0, device.timeout)
+                .map(|s| s.to_string())
+            {
+                sp_device.manufacturer = Some(manufacturer);
+            }
+
+            if let Ok(serial) = device
+                .handle
+                .get_string_descriptor(device_desc.serial_number_string_index, 0, device.timeout)
+                .map(|s| s.to_string())
+            {
+                sp_device.serial_num = Some(serial);
+            }
 
             let mut extra = usb::USBDeviceExtra {
                 max_packet_size: device_desc.max_packet_size,
@@ -1792,7 +1703,7 @@ pub mod nusb {
                 ),
                 driver: None,
                 syspath: get_syspath(&sp_device.sysfs_name()),
-                // These are idProduct, idVendor in lsusb - from udev_hwdb/usb-ids
+                // These are idProduct, idVendor in lsusb - from udev_hwdb/usb-ids - not device descriptor
                 vendor: names::vendor(device_desc.vendor_id)
                     .or(usb_ids::Vendor::from_id(device_desc.vendor_id)
                         .map(|v| v.name().to_owned())),
@@ -1800,7 +1711,7 @@ pub mod nusb {
                     usb_ids::Device::from_vid_pid(device_desc.vendor_id, device_desc.product_id)
                         .map(|v| v.name().to_owned()),
                 ),
-                configurations: self.build_configurations(device, sp_device, with_udev)?,
+                configurations: self.build_configurations(device, with_udev)?,
                 status: Self::get_device_status(device).ok(),
                 debug: Self::get_debug_descriptor(device).ok(),
                 binary_object_store: None,
@@ -1856,9 +1767,10 @@ pub mod nusb {
                 product_id: Some(device_info.product_id()),
                 device_speed: speed,
                 location_id: system_profiler::DeviceLocation {
-                    bus: device_info.bus_number(),
+                    // nusb bus_id is a string; busnum on Linux (number)
+                    bus: device_info.bus_id().parse::<u8>().unwrap_or(0),
                     number: device_info.device_address(),
-                    tree_positions: device_info.port_chain().unwrap_or(&[1, 0]).to_owned(),
+                    tree_positions: device_info.port_chain().to_vec(),
                 },
                 bcd_device: Some(usb::Version::from_bcd(device_info.device_version())),
                 // gets added on the extra read
@@ -1912,6 +1824,7 @@ pub mod nusb {
             if let Ok(device) = device_info.open() {
                 let mut error_str = None;
 
+                // get the first language - proably US English
                 let languages: Vec<u16> = device
                     .get_string_descriptor_supported_languages(std::time::Duration::from_secs(1))
                     .map(|i| i.collect())
@@ -1925,6 +1838,8 @@ pub mod nusb {
                     let usb_device = UsbDevice {
                         handle: device,
                         language,
+                        vidpid: (device_info.vendor_id(), device_info.product_id()),
+                        location: sp_device.location_id.clone(),
                         timeout: std::time::Duration::from_secs(1),
                     };
 
@@ -1962,16 +1877,20 @@ pub mod nusb {
             } else {
                 log::warn!("Failed to open device for extra data: {:04x}:{:04x}. Ensure user has USB access permissions: https://docs.rs/nusb/latest/nusb/#linux", device_info.vendor_id(), device_info.product_id());
                 sp_device.profiler_error =
-                    Some("Failed to open device, extra data incomplete".to_string());
+                    Some("Failed to open device, extra data incomplete and possibly inaccurate".to_string());
                 sp_device.extra = Some(usb::USBDeviceExtra {
-                    max_packet_size: device_info.max_packet_size(),
+                    max_packet_size: device_info.max_packet_size_0(),
                     // nusb doesn't have these cached
                     string_indexes: (0, 0, 0),
                     driver: None,
                     syspath: get_syspath(&sp_device.sysfs_name()),
-                    // these should be read from the string descriptor we can't open device so just copy the cached ones in
-                    vendor: sp_device.manufacturer.clone(),
-                    product_name: Some(sp_device.name.clone()),
+                    vendor: names::vendor(device_info.vendor_id())
+                        .or(usb_ids::Vendor::from_id(device_info.vendor_id())
+                            .map(|v| v.name().to_owned())),
+                    product_name: names::product(device_info.vendor_id(), device_info.product_id()).or(
+                        usb_ids::Device::from_vid_pid(device_info.vendor_id(), device_info.product_id())
+                            .map(|v| v.name().to_owned()),
+                    ),
                     configurations: vec![],
                     status: None,
                     debug: None,

@@ -76,11 +76,8 @@ impl SysfsPath {
         fs::read_to_string(&attr_path)
             .map_err(|e| Error::new(ErrorKind::Io, &e.to_string()))
             .and_then(|v| {
-                parse(v.trim()).map_err(|_| {
-                    Error::new(ErrorKind::Parsing, attr_path.to_str().unwrap_or_default())
-                })
+                parse(v.trim())
             })
-            .map_err(|e| e.into())
     }
 
     pub(crate) fn read_attr<T: FromStr>(&self, attr: &str) -> Result<T> {
@@ -102,7 +99,7 @@ impl SysfsPath {
         fs::read_dir(&self.0)
             .ok()
             .into_iter()
-            .flat_map(|x| x)
+            .flatten()
             .filter_map(|f| f.ok())
             .filter(|f| f.file_type().ok().is_some_and(|t| t.is_dir()))
             .map(|f| SysfsPath(f.path()))
@@ -125,7 +122,7 @@ impl FromHexStr for u16 {
     }
 }
 
-const SYSFS_PREFIX: &'static str = "/sys/bus/usb/devices/";
+const SYSFS_PREFIX: &str = "/sys/bus/usb/devices/";
 
 #[cfg(target_os = "linux")]
 fn probe_device(path: SysfsPath) -> Result<system_profiler::USBDevice> {

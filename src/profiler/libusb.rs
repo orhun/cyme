@@ -133,6 +133,28 @@ impl From<libusb::Version> for usb::Version {
     }
 }
 
+/// Attempt to retrieve the current bConfigurationValue and iConfiguration for a device
+/// This will only return the current configuration, not all possible configurations
+/// If there are any failures in retrieving the data, None is returned
+#[allow(unused_variables)]
+fn get_sysfs_configuration_string(sysfs_name: &str) -> Option<(u8, String)> {
+    #[cfg(target_os = "linux")]
+    // Determine bConfigurationValue value on linux
+    match get_sysfs_string(sysfs_name, "bConfigurationValue") {
+        Some(s) => match s.parse::<u8>() {
+            Ok(v) => {
+                // Determine iConfiguration
+                get_sysfs_string(sysfs_name, "configuration").map(|s| (v, s))
+            }
+            Err(_) => None,
+        },
+        None => None,
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    None
+}
+
 impl<T: libusb::UsbContext> UsbOperations for UsbDevice<T> {
     /// Get string descriptor from device
     ///

@@ -11,6 +11,7 @@ use std::fs;
 use std::io::Read;
 use std::str::FromStr;
 
+use super::*;
 use crate::error::{Error, ErrorKind};
 use crate::types::NumericalUnit;
 use crate::usb::*;
@@ -97,17 +98,23 @@ impl fmt::Display for SPUSBDataType {
     }
 }
 
-/// USB bus JSON returned from system_profiler but now used for other platforms
+/// USB bus returned from system_profiler but now used for other platforms.
 ///
-/// It is a merging of the PCI Host Controller information and Root Hub device data (if present)
+/// It is a merging of the PCI Host Controller information and root hub device data (if present). Essentially a root hub but not as a pseudo device but an explicit type - since the root hub is a bit confusing in that sense.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct USBBus {
-    /// Bus name or product name
+    /// System internal bus name based on Root Hub device name
+    ///
+    /// Normally something generic like 'Root Hub', 'USB 3.0 Bus'
     #[serde(rename(deserialize = "_name"), alias = "name")]
     pub name: String,
-    /// Host Controller on macOS, vendor put here when using libusb
+    /// System internal bus provider name
     pub host_controller: String,
+    /// Vendor name of PCI Host Controller from pci.ids
+    pub host_controller_vendor: Option<String>,
+    /// Device name of PCI Host Controller from pci.ids
+    pub host_controller_device: Option<String>,
     /// PCI device ID (PID)
     #[serde(default, deserialize_with = "deserialize_option_number_from_string")]
     pub pci_device: Option<u16>,
@@ -120,9 +127,77 @@ pub struct USBBus {
     /// Number of bus on system
     #[serde(default, deserialize_with = "deserialize_option_number_from_string")]
     pub usb_bus_number: Option<u8>,
-    /// `USBDevices` on the `USBBus`. Since a device can have devices too, need to walk all down all
+    /// [`USBDevice`]s on the [`USBBus`]. Since a device can have devices too, need to walk down all devices to get all devices on the bus
+    ///
+    /// On Linux, the root hub is also included in this list
     #[serde(rename(deserialize = "_items"), alias = "devices")]
     pub devices: Option<Vec<USBDevice>>,
+}
+
+impl TryFrom<USBDevice> for USBBus {
+    type Error = Error;
+
+    fn try_from(device: USBDevice) -> Result<Self> {
+        if !device.is_root_hub() {
+            return Err(Error::new(
+                ErrorKind::InvalidArg,
+                "USBDevice is not a root hub",
+            ));
+        }
+
+        // on Linux, attempt to get the PCI host controller information, the kernel name of which is the root hub serial
+        let (pci_vid, pci_pid) = if cfg!(target_os = "linux") {
+            if let Some(sysfs_pci_name) = device.serial_num {
+                let pci_path = SysfsPath::from(format!(
+                    "{}{}", SYSFS_PCI_PREFIX, sysfs_pci_name
+                ));
+                if pci_path.exists() {
+                    log::debug!("probing PCI path for bus data: {}", pci_path);
+                    (pci_path.read_attr_hex("vendor").ok(), pci_path.read_attr_hex("device").ok())
+                } else {
+                    (None, None)
+                }
+            } else {
+                (device.vendor_id, device.product_id)
+            }
+        // otherwise pseudo root hub should have PCI IDs
+        } else {
+            (device.vendor_id, device.product_id)
+        };
+
+        let (host_controller_device, host_controller_vendor) = if let (Some(v), Some(p)) = (pci_vid, pci_pid) {
+            log::debug!("looking up PCI IDs: {:04x}:{:04x}", v, p);
+            match pci_ids::Device::from_vid_pid(v, p) {
+                Some(d) => (Some(d.vendor().name().to_string()), Some(d.name().to_string())),
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+
+        Ok(USBBus {
+            name: device.name,
+            host_controller: device.manufacturer.unwrap_or_default(),
+            host_controller_vendor,
+            host_controller_device,
+            pci_device: pci_pid,
+            pci_vendor: pci_vid,
+            usb_bus_number: Some(device.location_id.bus),
+            devices: device.devices,
+            ..Default::default()
+        })
+    }
+}
+
+impl From<u8> for USBBus {
+    fn from(bus: u8) -> Self {
+        USBBus {
+            name: format!("USB Bus {:03}", bus),
+            host_controller: String::from("USB Host Controller"),
+            usb_bus_number: Some(bus),
+            ..Default::default()
+        }
+    }
 }
 
 /// Returns of Vec of devices in the USBBus as a reference
@@ -429,7 +504,7 @@ pub struct DeviceLocation {
 impl FromStr for DeviceLocation {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self> {
         let location_split: Vec<&str> = s.split('/').collect();
         let reg = location_split
             .first()
@@ -475,7 +550,7 @@ impl DeviceLocation {
     /// Port path of parent
     ///
     /// A wrapper for [`get_parent_path`]
-    pub fn parent_path(&self) -> Result<String, Error> {
+    pub fn parent_path(&self) -> Result<String> {
         get_parent_path(self.bus, &self.tree_positions)
     }
 
@@ -493,7 +568,7 @@ impl DeviceLocation {
 }
 
 impl<'de> Deserialize<'de> for DeviceLocation {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -513,7 +588,7 @@ impl<'de> Deserialize<'de> for DeviceLocation {
                 formatter.write_str("a string with 0xLOCATION_REG/DEVICE_NO")
             }
 
-            fn visit_seq<V>(self, mut seq: V) -> Result<DeviceLocation, V::Error>
+            fn visit_seq<V>(self, mut seq: V) -> core::result::Result<DeviceLocation, V::Error>
             where
                 V: SeqAccess<'de>,
             {
@@ -533,7 +608,7 @@ impl<'de> Deserialize<'de> for DeviceLocation {
                 })
             }
 
-            fn visit_map<V>(self, mut map: V) -> Result<DeviceLocation, V::Error>
+            fn visit_map<V>(self, mut map: V) -> core::result::Result<DeviceLocation, V::Error>
             where
                 V: MapAccess<'de>,
             {
@@ -573,14 +648,14 @@ impl<'de> Deserialize<'de> for DeviceLocation {
                 })
             }
 
-            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            fn visit_string<E>(self, value: String) -> core::result::Result<Self::Value, E>
             where
                 E: de::Error,
             {
                 DeviceLocation::from_str(value.as_str()).map_err(serde::de::Error::custom)
             }
 
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            fn visit_str<E>(self, value: &str) -> core::result::Result<Self::Value, E>
             where
                 E: de::Error,
             {
@@ -627,7 +702,7 @@ impl fmt::Display for DeviceSpeed {
 impl FromStr for DeviceSpeed {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self> {
         // try to match speed enum else provide string description provided in system_profiler dump
         match Speed::from_str(s) {
             Ok(v) => Ok(DeviceSpeed::SpeedValue(v)),
@@ -920,7 +995,7 @@ impl USBDevice {
     /// let d = cyme::profiler::USBDevice{ name: String::from("Test device"), location_id: cyme::profiler::DeviceLocation { bus: 1, number: 0, tree_positions: vec![] }, ..Default::default() };
     /// assert_eq!(d.parent_path().is_err(), true);
     /// ```
-    pub fn parent_path(&self) -> Result<String, Error> {
+    pub fn parent_path(&self) -> Result<String> {
         self.location_id.parent_path()
     }
 
@@ -1396,7 +1471,7 @@ impl USBFilter {
 /// Reads a json dump at `file_path` with serde deserializer - either from `system_profiler` or from `cyme --json`
 ///
 /// Must be a full tree including buses. Use `read_flat_json_dump` for devices only
-pub fn read_json_dump(file_path: &str) -> Result<SPUSBDataType, Error> {
+pub fn read_json_dump(file_path: &str) -> Result<SPUSBDataType> {
     let mut file = fs::File::options().read(true).open(file_path)?;
 
     let mut data = String::new();
@@ -1413,7 +1488,7 @@ pub fn read_json_dump(file_path: &str) -> Result<SPUSBDataType, Error> {
 }
 
 /// Reads a flat json dump (devices no buses) at `file_path` with serde deserializer - either from `system_profiler` or from `cyme --json`
-pub fn read_flat_json_dump(file_path: &str) -> Result<Vec<USBDevice>, Error> {
+pub fn read_flat_json_dump(file_path: &str) -> Result<Vec<USBDevice>> {
     let mut file = fs::File::options().read(true).open(file_path)?;
 
     let mut data = String::new();
@@ -1432,11 +1507,13 @@ pub fn read_flat_json_dump(file_path: &str) -> Result<Vec<USBDevice>, Error> {
 /// Reads a flat json dump (devices no buses) at `file_path` with serde deserializer from `cyme --json` and converts to `SPUSBDataType`
 ///
 /// This is useful for converting a flat json dump to a full tree for use with `USBFilter`. Bus information is phony however.
-pub fn read_flat_json_to_phony_bus(file_path: &str) -> Result<SPUSBDataType, Error> {
+pub fn read_flat_json_to_phony_bus(file_path: &str) -> Result<SPUSBDataType> {
     let devices = read_flat_json_dump(file_path)?;
     let bus = USBBus {
-        name: String::from("Phony Flat JSON Import"),
+        name: String::from("Phony Flat JSON Import Bus"),
         host_controller: String::from("Phony Host Controller"),
+        host_controller_vendor: None,
+        host_controller_device: None,
         pci_device: None,
         pci_vendor: None,
         pci_revision: None,
@@ -1450,7 +1527,7 @@ pub fn read_flat_json_to_phony_bus(file_path: &str) -> Result<SPUSBDataType, Err
 /// Deserializes an option number from String (base10 or base16 encoding) or a number
 ///
 /// Modified from https://github.com/vityafx/serde-aux/blob/master/src/field_attributes.rs with addition of base16 encoding
-fn deserialize_option_number_from_string<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+fn deserialize_option_number_from_string<'de, T, D>(deserializer: D) -> core::result::Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: FromStr + serde::Deserialize<'de>,
@@ -1497,7 +1574,7 @@ where
 
 fn deserialize_option_version_from_string<'de, D>(
     deserializer: D,
-) -> Result<Option<Version>, D::Error>
+) -> core::result::Result<Option<Version>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -1515,7 +1592,7 @@ where
     }
 }
 
-fn deserialize_version<'de, D>(deserializer: D) -> Result<Version, D::Error>
+fn deserialize_version<'de, D>(deserializer: D) -> core::result::Result<Version, D::Error>
 where
     D: serde::de::Deserializer<'de>,
 {
@@ -1527,7 +1604,7 @@ where
             formatter.write_str("BCD version base16 encoding [MM.mP] where MM is Major, m is Minor and P is sub-minor")
         }
 
-        fn visit_f32<E>(self, value: f32) -> Result<Version, E>
+        fn visit_f32<E>(self, value: f32) -> core::result::Result<Version, E>
         where
             E: serde::de::Error,
         {
@@ -1535,7 +1612,7 @@ where
                 .map_err(|_| E::invalid_value(serde::de::Unexpected::Float(value.into()), &self))
         }
 
-        fn visit_str<E>(self, value: &str) -> Result<Version, E>
+        fn visit_str<E>(self, value: &str) -> core::result::Result<Version, E>
         where
             E: serde::de::Error,
         {
@@ -1547,7 +1624,7 @@ where
     deserializer.deserialize_any(VersionVisitor)
 }
 
-fn version_serializer<S>(version: &Option<Version>, s: S) -> Result<S::Ok, S::Error>
+fn version_serializer<S>(version: &Option<Version>, s: S) -> core::result::Result<S::Ok, S::Error>
 where
     S: serde::ser::Serializer,
 {

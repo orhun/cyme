@@ -595,12 +595,12 @@ where
     }
 
     /// Get [`USBDevice`]s connected to the host, excluding root hubs
-    fn get_devices(&self, with_extra: bool) -> Result<Vec<USBDevice>>;
+    fn get_devices(&mut self, with_extra: bool) -> Result<Vec<USBDevice>>;
 
     /// Get root hubs connected to the host as [`USBDevice`]s
     ///
     /// root hubs are pseudo devices and not always listed in the device list, so this is a separate function to get them. The data is used to help create [`USBBus`]es; root hubs are an abstraction over Host Controller information.
-    fn get_root_hubs(&self) -> Result<HashMap<u8, USBDevice>>;
+    fn get_root_hubs(&mut self) -> Result<HashMap<u8, USBDevice>>;
 
     fn new_sp_bus(&self, bus_number: u8, root_hub: Option<USBDevice>) -> USBBus {
         root_hub.map(|rh| rh.try_into().unwrap_or_else(|e| {
@@ -610,7 +610,7 @@ where
     }
 
     /// Build the [`SPUSBDataType`] from the Profiler get_devices and get_root_hubs (for buses) functions
-    fn get_spusb(&self, with_extra: bool) -> Result<SPUSBDataType> {
+    fn get_spusb(&mut self, with_extra: bool) -> Result<SPUSBDataType> {
         let mut spusb = SPUSBDataType { buses: Vec::new() };
 
         log::info!("Building SPUSBDataType with {:?}", self);
@@ -703,7 +703,7 @@ where
     /// Fills a passed mutable `spusb` reference to fill using `get_spusb`. Will replace existing [`USBDevice`]s found in the Profiler tree but leave others and the buses.
     ///
     /// The main use case for this is to merge with macOS `system_profiler` data, so that [`usb::USBDeviceExtra`] can be obtained but internal buses kept. One could also use it to update a static .json dump.
-    fn fill_spusb(&self, spusb: &mut SPUSBDataType) -> Result<()> {
+    fn fill_spusb(&mut self, spusb: &mut SPUSBDataType) -> Result<()> {
         let libusb_spusb = self.get_spusb(true)?;
 
         // merge if passed has any buses
@@ -858,14 +858,14 @@ fn get_syspath(port_path: &str) -> Option<String> {
 pub fn get_spusb() -> Result<SPUSBDataType> {
     #[cfg(all(feature = "libusb", not(feature = "nusb")))]
     {
-        let profiler = libusb::LibUsbProfiler;
+        let mut profiler = libusb::LibUsbProfiler;
         <libusb::LibUsbProfiler as Profiler<libusb::UsbDevice<rusb::Context>>>::get_spusb(
             &profiler, false,
         )
     }
     #[cfg(feature = "nusb")]
     {
-        let profiler = nusb::NusbProfiler;
+        let mut profiler = nusb::NusbProfiler::new();
         profiler.get_spusb(true)
     }
 
@@ -884,7 +884,7 @@ pub fn get_spusb() -> Result<SPUSBDataType> {
 pub fn get_spusb_with_extra() -> Result<SPUSBDataType> {
     #[cfg(all(feature = "libusb", not(feature = "nusb")))]
     {
-        let profiler = libusb::LibUsbProfiler;
+        let mut profiler = libusb::LibUsbProfiler;
         <libusb::LibUsbProfiler as Profiler<libusb::UsbDevice<rusb::Context>>>::get_spusb(
             &profiler, true,
         )
@@ -892,7 +892,7 @@ pub fn get_spusb_with_extra() -> Result<SPUSBDataType> {
 
     #[cfg(feature = "nusb")]
     {
-        let profiler = nusb::NusbProfiler;
+        let mut profiler = nusb::NusbProfiler::new();
         profiler.get_spusb(true)
     }
 

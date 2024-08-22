@@ -6,7 +6,10 @@ use ::nusb;
 use usb_ids::{self, FromId};
 
 #[derive(Debug)]
-pub(crate) struct NusbProfiler;
+pub(crate) struct NusbProfiler {
+    #[cfg(target_os = "windows")]
+    bus_id_map: HashMap<String, u8>,
+}
 
 pub(crate) struct UsbDevice {
     handle: nusb::Device,
@@ -137,6 +140,13 @@ impl UsbOperations for UsbDevice {
 }
 
 impl NusbProfiler {
+    pub fn new() -> Self {
+        Self {
+            #[cfg(target_os = "windows")]
+            bus_id_map: HashMap::new(),
+        }
+    }
+
     fn build_endpoints(
         &self,
         device: &UsbDevice,
@@ -403,7 +413,7 @@ impl NusbProfiler {
     }
 
     fn build_spdevice(
-        &self,
+        &mut self,
         device_info: &nusb::DeviceInfo,
         with_extra: bool,
     ) -> Result<USBDevice> {
@@ -535,12 +545,26 @@ impl NusbProfiler {
 }
 
 impl Profiler<UsbDevice> for NusbProfiler {
-    fn get_devices(&self, with_extra: bool) -> Result<Vec<USBDevice>> {
+    fn get_devices(&mut self, with_extra: bool) -> Result<Vec<USBDevice>> {
         let mut devices = Vec::new();
         for device in nusb::list_devices()? {
             match self.build_spdevice(&device, with_extra) {
-                Ok(sp_device) => {
+                #[allow(unused_mut)]
+                Ok(mut sp_device) => {
+                    #[cfg(target_os = "windows")]
+                    {
+                        // Windows doesn't have a bus number for root hubs, so we use the index
+                        // and assign devices based on serial number
+                        if let Some(existing_no) = self.bus_id_map.get(device.bus_id()) {
+                            sp_device.location_id.bus = *existing_no;
+                        } else {
+                            let bus = self.bus_id_map.len() as u8;
+                            self.bus_id_map.insert(device.bus_id().to_owned(), bus);
+                            sp_device.location_id.bus = bus;
+                        }
+                    }
                     devices.push(sp_device.to_owned());
+
                     let print_stderr =
                         std::env::var_os("CYME_PRINT_NON_CRITICAL_PROFILER_STDERR").is_some();
 
@@ -560,18 +584,18 @@ impl Profiler<UsbDevice> for NusbProfiler {
         Ok(devices)
     }
 
-    fn get_root_hubs(&self) -> Result<HashMap<u8, USBDevice>> {
-        let mut devices = Vec::new();
+    fn get_root_hubs(&mut self) -> Result<HashMap<u8, USBDevice>> {
+        let mut root_hubs = HashMap::new();
         for device in nusb::list_root_hubs()? {
             match self.build_spdevice(&device, true) {
-                Ok(sp_device) => {
+                #[allow(unused_mut)]
+                Ok(mut sp_device) => {
                     if !sp_device.is_root_hub() {
                         return Err(Error::new(
                                 ErrorKind::InvalidDevice,
                                 &format!("Device {} returned by nusb::list_root_hubs is not a root hub!", sp_device)
                         ));
                     }
-                    devices.push(sp_device.to_owned());
                     let print_stderr =
                         std::env::var_os("CYME_PRINT_NON_CRITICAL_PROFILER_STDERR").is_some();
 
@@ -583,16 +607,29 @@ impl Profiler<UsbDevice> for NusbProfiler {
                             log::warn!("Non-critical error during profile: {}", e);
                         }
                     });
+
+                    #[cfg(target_os = "windows")] 
+                    {
+                        if let Some(existing_no) = self.bus_id_map.get(device.bus_id()) {
+                            sp_device.location_id.bus = *existing_no;
+                        } else {
+                            let bus = self.bus_id_map.len() as u8;
+                            self.bus_id_map.insert(device.bus_id().to_owned(), bus);
+                            sp_device.location_id.bus = bus;
+                        }
+                    }
+
+                    root_hubs.insert(sp_device.location_id.bus, sp_device);
                 }
                 Err(e) => eprintln!("Failed to get data for {:?}: {}", device, e),
             }
         }
 
-        Ok(devices.into_iter().map(|d| (d.location_id.bus, d)).collect())
+        Ok(root_hubs)
     }
 }
 
 pub(crate) fn fill_spusb(spusb: &mut SPUSBDataType) -> Result<()> {
-    let profiler = NusbProfiler;
+    let mut profiler = NusbProfiler::new();
     profiler.fill_spusb(spusb)
 }

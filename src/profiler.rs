@@ -603,10 +603,14 @@ where
     fn get_root_hubs(&mut self) -> Result<HashMap<u8, USBDevice>>;
 
     fn new_sp_bus(&self, bus_number: u8, root_hub: Option<USBDevice>) -> USBBus {
-        root_hub.map(|rh| rh.try_into().unwrap_or_else(|e| {
-            log::warn!("Failed to convert root hub to USBBus: {:?}", e);
-            USBBus::from(bus_number)
-        })).unwrap_or(USBBus::from(bus_number))
+        root_hub
+            .map(|rh| {
+                rh.try_into().unwrap_or_else(|e| {
+                    log::warn!("Failed to convert root hub to USBBus: {:?}", e);
+                    USBBus::from(bus_number)
+                })
+            })
+            .unwrap_or(USBBus::from(bus_number))
     }
 
     /// Build the [`SPUSBDataType`] from the Profiler get_devices and get_root_hubs (for buses) functions
@@ -818,7 +822,9 @@ impl From<SysfsPath> for PathBuf {
 #[allow(unused_variables)]
 fn get_sysfs_string(sysfs_name: &str, attr: &str) -> Option<String> {
     #[cfg(target_os = "linux")]
-    return std::fs::read_to_string(format!("{}{}/{}", SYSFS_USB_PREFIX, sysfs_name, attr)).ok().map(|s| s.trim().to_string());
+    return std::fs::read_to_string(format!("{}{}/{}", SYSFS_USB_PREFIX, sysfs_name, attr))
+        .ok()
+        .map(|s| s.trim().to_string());
     #[cfg(not(target_os = "linux"))]
     return None;
 }
@@ -860,7 +866,8 @@ pub fn get_spusb() -> Result<SPUSBDataType> {
     {
         let mut profiler = libusb::LibUsbProfiler;
         <libusb::LibUsbProfiler as Profiler<libusb::UsbDevice<rusb::Context>>>::get_spusb(
-            &mut profiler, false,
+            &mut profiler,
+            false,
         )
     }
     #[cfg(feature = "nusb")]
@@ -886,7 +893,8 @@ pub fn get_spusb_with_extra() -> Result<SPUSBDataType> {
     {
         let mut profiler = libusb::LibUsbProfiler;
         <libusb::LibUsbProfiler as Profiler<libusb::UsbDevice<rusb::Context>>>::get_spusb(
-            &mut profiler, true,
+            &mut profiler,
+            true,
         )
     }
 

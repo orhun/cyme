@@ -148,12 +148,13 @@ impl TryFrom<USBDevice> for USBBus {
         // on Linux, attempt to get the PCI host controller information, the kernel name of which is the root hub serial
         let (pci_vid, pci_pid) = if cfg!(target_os = "linux") {
             if let Some(sysfs_pci_name) = device.serial_num {
-                let pci_path = SysfsPath::from(format!(
-                    "{}{}", SYSFS_PCI_PREFIX, sysfs_pci_name
-                ));
+                let pci_path = SysfsPath::from(format!("{}{}", SYSFS_PCI_PREFIX, sysfs_pci_name));
                 if pci_path.exists() {
                     log::debug!("probing PCI path for bus data: {}", pci_path);
-                    (pci_path.read_attr_hex("vendor").ok(), pci_path.read_attr_hex("device").ok())
+                    (
+                        pci_path.read_attr_hex("vendor").ok(),
+                        pci_path.read_attr_hex("device").ok(),
+                    )
                 } else {
                     (None, None)
                 }
@@ -165,15 +166,19 @@ impl TryFrom<USBDevice> for USBBus {
             (device.vendor_id, device.product_id)
         };
 
-        let (host_controller_device, host_controller_vendor) = if let (Some(v), Some(p)) = (pci_vid, pci_pid) {
-            log::debug!("looking up PCI IDs: {:04x}:{:04x}", v, p);
-            match pci_ids::Device::from_vid_pid(v, p) {
-                Some(d) => (Some(d.vendor().name().to_string()), Some(d.name().to_string())),
-                None => (None, None),
-            }
-        } else {
-            (None, None)
-        };
+        let (host_controller_device, host_controller_vendor) =
+            if let (Some(v), Some(p)) = (pci_vid, pci_pid) {
+                log::debug!("looking up PCI IDs: {:04x}:{:04x}", v, p);
+                match pci_ids::Device::from_vid_pid(v, p) {
+                    Some(d) => (
+                        Some(d.vendor().name().to_string()),
+                        Some(d.name().to_string()),
+                    ),
+                    None => (None, None),
+                }
+            } else {
+                (None, None)
+            };
 
         Ok(USBBus {
             name: device.name,
@@ -1527,7 +1532,9 @@ pub fn read_flat_json_to_phony_bus(file_path: &str) -> Result<SPUSBDataType> {
 /// Deserializes an option number from String (base10 or base16 encoding) or a number
 ///
 /// Modified from https://github.com/vityafx/serde-aux/blob/master/src/field_attributes.rs with addition of base16 encoding
-fn deserialize_option_number_from_string<'de, T, D>(deserializer: D) -> core::result::Result<Option<T>, D::Error>
+fn deserialize_option_number_from_string<'de, T, D>(
+    deserializer: D,
+) -> core::result::Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: FromStr + serde::Deserialize<'de>,

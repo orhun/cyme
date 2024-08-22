@@ -592,8 +592,11 @@ impl Profiler<UsbDevice> for NusbProfiler {
                 Ok(mut sp_device) => {
                     if !sp_device.is_root_hub() {
                         return Err(Error::new(
-                                ErrorKind::InvalidDevice,
-                                &format!("Device {} returned by nusb::list_root_hubs is not a root hub!", sp_device)
+                            ErrorKind::InvalidDevice,
+                            &format!(
+                                "Device {} returned by nusb::list_root_hubs is not a root hub!",
+                                sp_device
+                            ),
                         ));
                     }
                     let print_stderr =
@@ -608,7 +611,7 @@ impl Profiler<UsbDevice> for NusbProfiler {
                         }
                     });
 
-                    #[cfg(target_os = "windows")] 
+                    #[cfg(target_os = "windows")]
                     {
                         if let Some(existing_no) = self.bus_id_map.get(device.bus_id()) {
                             sp_device.location_id.bus = *existing_no;

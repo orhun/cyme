@@ -860,7 +860,7 @@ pub fn get_spusb() -> Result<SPUSBDataType> {
     {
         let mut profiler = libusb::LibUsbProfiler;
         <libusb::LibUsbProfiler as Profiler<libusb::UsbDevice<rusb::Context>>>::get_spusb(
-            &profiler, false,
+            &mut profiler, false,
         )
     }
     #[cfg(feature = "nusb")]
@@ -886,7 +886,7 @@ pub fn get_spusb_with_extra() -> Result<SPUSBDataType> {
     {
         let mut profiler = libusb::LibUsbProfiler;
         <libusb::LibUsbProfiler as Profiler<libusb::UsbDevice<rusb::Context>>>::get_spusb(
-            &profiler, true,
+            &mut profiler, true,
         )
     }
 

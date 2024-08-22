@@ -692,6 +692,7 @@ dependencies = [
 [[package]]
 name = "nusb"
 version = "0.1.10"
+source = "git+https://github.com/tuna-f1sh/nusb?branch=root_hub#e91b4bfb33355073c7b7ffaf076a7484e4aa3bac"
 dependencies = [
  "atomic-waker",
  "core-foundation",

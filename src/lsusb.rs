@@ -3,7 +3,7 @@
 //! Originally based on [libusb list_devices.rs example](https://github.com/dcuddeback/libusb-rs/blob/master/examples/list_devices.rs), attempts to mimic lsusb output. The [lsusb source code](https://github.com/gregkh/usbutils/blob/master/lsusb.c) was used as a reference for the styling and content; even odities/inconsistencies were kept!
 use crate::display::PrintSettings;
 use crate::error::{Error, ErrorKind};
-use crate::profiler::{SystemProfile, Device};
+use crate::profiler::{Device, SystemProfile};
 use uuid::Uuid;
 
 use crate::usb::descriptors::audio;

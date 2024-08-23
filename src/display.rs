@@ -15,9 +15,9 @@ use terminal_size::{Height, Width};
 
 use crate::colour;
 use crate::icon;
-use crate::profiler::{SystemProfile, Bus, Device, Filter};
+use crate::profiler::{Bus, Device, Filter, SystemProfile};
 use crate::usb::DeviceExtra;
-use crate::usb::{ConfigAttributes, Direction, Configuration, Endpoint, Interface};
+use crate::usb::{ConfigAttributes, Configuration, Direction, Endpoint, Interface};
 
 const MAX_VERBOSITY: u8 = 4;
 const ICON_HEADING: &str = "I";
@@ -2595,13 +2595,12 @@ pub fn print_devices(
 
 /// Print [`SystemProfile`] [`Bus`] and [`Device`] information
 pub fn print_sp_usb(sp_usb: &SystemProfile, settings: &PrintSettings) {
-    let mut bb =
-        settings
-            .bus_blocks
-            .to_owned()
-            .unwrap_or(Block::<BusBlocks, Bus>::default_blocks(
-                settings.verbosity >= MAX_VERBOSITY || settings.more,
-            ));
+    let mut bb = settings
+        .bus_blocks
+        .to_owned()
+        .unwrap_or(Block::<BusBlocks, Bus>::default_blocks(
+            settings.verbosity >= MAX_VERBOSITY || settings.more,
+        ));
     let mut db = settings.device_blocks.to_owned().unwrap_or(
         if settings.verbosity >= MAX_VERBOSITY || settings.more {
             DeviceBlocks::default_blocks(true)

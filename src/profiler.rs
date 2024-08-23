@@ -10,7 +10,7 @@
 //! println!("{:#}", spusb);
 //! ```
 //!
-//! See [`types`] docs for what can be done with returned data, such as [`USBFilter`]
+//! See [`types`] docs for what can be done with returned data, such as [`Filter`]
 use crate::error::Result;
 use itertools::Itertools;
 use std::collections::HashMap;

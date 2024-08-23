@@ -520,8 +520,8 @@ fn dump_device(device: &Device) {
     );
 }
 
-/// Dump a [`USBConfiguration`] in style of lsusb --verbose
-fn dump_config(config: &USBConfiguration, indent: usize) {
+/// Dump a [`Configuration`] in style of lsusb --verbose
+fn dump_config(config: &Configuration, indent: usize) {
     dump_string("Configuration Descriptor:", indent);
     dump_value(config.length, "bLength", indent + 2, LSUSB_DUMP_WIDTH);
     dump_value(2, "bDescriptorType", indent + 2, LSUSB_DUMP_WIDTH); // type 2 for configuration
@@ -596,8 +596,8 @@ fn dump_config(config: &USBConfiguration, indent: usize) {
     }
 }
 
-/// Dump a [`USBInterfaceAssociation`] in style of lsusb --verbose
-fn dump_interface(interface: &USBInterface, indent: usize) {
+/// Dump a [`InterfaceAssociation`] in style of lsusb --verbose
+fn dump_interface(interface: &Interface, indent: usize) {
     let interface_name = names::class(interface.class.into());
     let sub_class_name = names::subclass(interface.class.into(), interface.sub_class);
     let protocol_name = names::protocol(
@@ -741,8 +741,8 @@ fn dump_interface(interface: &USBInterface, indent: usize) {
     }
 }
 
-/// Dump a [`USBEndpoint`] in style of lsusb --verbose
-fn dump_endpoint(endpoint: &USBEndpoint, indent: usize) {
+/// Dump a [`Endpoint`] in style of lsusb --verbose
+fn dump_endpoint(endpoint: &Endpoint, indent: usize) {
     dump_string("Endpoint Descriptor:", indent);
     dump_value(endpoint.length, "bLength", indent + 2, LSUSB_DUMP_WIDTH);
     dump_value(5, "bDescriptorType", indent + 2, LSUSB_DUMP_WIDTH); // type 5 for endpoint

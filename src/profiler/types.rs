@@ -1317,7 +1317,7 @@ impl fmt::Display for Device {
 ///
 /// The tree to a [`Device`] is kept even if parent branches are not matches. To avoid this, one must flatten the devices first.
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct USBFilter {
+pub struct Filter {
     /// Retain only devices with vendor id matching this
     pub vid: Option<u16>,
     /// Retain only devices with product id matching this
@@ -1338,13 +1338,17 @@ pub struct USBFilter {
     pub no_exclude_root_hub: bool,
 }
 
+/// Deprecated alias for [`Filter`]
+#[deprecated(since = "2.0.0", note = "Use Filter instead")]
+pub type USBFilter = Filter;
+
 /// Filter devices with name
 ///
 /// ```
 /// use cyme::profiler::*;
 ///
 /// # let mut spusb = read_json_dump(&"./tests/data/system_profiler_dump.json").unwrap();
-/// let filter = USBFilter {
+/// let filter = Filter {
 ///     name: Some(String::from("Black Magic Probe")),
 ///     ..Default::default()
 /// };
@@ -1362,7 +1366,7 @@ pub struct USBFilter {
 /// use cyme::profiler::*;
 ///
 /// # let mut spusb = read_json_dump(&"./tests/data/system_profiler_dump.json").unwrap();
-/// let filter = USBFilter {
+/// let filter = Filter {
 ///     vid: Some(0x1d50),
 ///     pid: Some(0x6018),
 ///     ..Default::default()
@@ -1382,7 +1386,7 @@ pub struct USBFilter {
 /// use cyme::profiler::*;
 ///
 /// # let mut spusb = read_json_dump(&"./tests/data/system_profiler_dump.json").unwrap();
-/// let filter = USBFilter {
+/// let filter = Filter {
 ///     number: Some(6),
 ///     bus: Some(20),
 ///     ..Default::default()
@@ -1400,7 +1404,7 @@ pub struct USBFilter {
 /// use cyme::profiler::*;
 ///
 /// # let mut spusb = read_json_dump(&"./tests/data/cyme_libusb_merge_macos_tree.json").unwrap();
-/// let filter = USBFilter {
+/// let filter = Filter {
 ///     class: Some(cyme::usb::ClassCode::CDCCommunications),
 ///     ..Default::default()
 /// };
@@ -1411,7 +1415,7 @@ pub struct USBFilter {
 /// assert_eq!(device.unwrap().name, "Black Magic Probe  v1.8.2");
 /// ```
 ///
-impl USBFilter {
+impl Filter {
     /// Creates a new filter with defaults
     pub fn new() -> Self {
         Default::default()
@@ -1523,7 +1527,7 @@ pub fn read_flat_json_dump(file_path: &str) -> Result<Vec<Device>> {
 
 /// Reads a flat json dump (devices no buses) at `file_path` with serde deserializer from `cyme --json` and converts to `SPUSBDataType`
 ///
-/// This is useful for converting a flat json dump to a full tree for use with `USBFilter`. Bus information is phony however.
+/// This is useful for converting a flat json dump to a full tree for use with `Filter`. Bus information is phony however.
 pub fn read_flat_json_to_phony_bus(file_path: &str) -> Result<SystemProfile> {
     let devices = read_flat_json_dump(file_path)?;
     let bus = Bus {

@@ -381,7 +381,7 @@ impl NusbProfiler {
                 let interface_extra = interface_alt
                     .descriptors()
                     .skip(1)
-                    // only want device and interface descriptors - nusb everything trailing
+                    // only want device and interface descriptors - nusb has everything trailing including endpoint
                     .filter(|d| {
                         (d.descriptor_type() & 0x0F) == 0x04 || (d.descriptor_type() & 0x0F) == 0x01
                     })
@@ -456,7 +456,7 @@ impl NusbProfiler {
             let config_extra = c
                 .descriptors()
                 .skip(1)
-                // only config descriptors - nusb everything trailing
+                // only config descriptors - nusb has everything trailing
                 .filter(|d| d.descriptor_type() == 0x02)
                 .flat_map(|d| d.to_vec())
                 .collect::<Vec<u8>>();
